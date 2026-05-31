@@ -156,3 +156,12 @@ const table = sqliteTable("session", {
 - Keep delivery vocabulary explicit. Prompts steer by default and coalesce into the active activity at the next safe provider-turn boundary. Explicit `queue` inputs open FIFO future activities one at a time after the active activity settles.
 - Keep EventV2 replay owner claims separate from clustered Session execution ownership.
 - Keep the System Context algebra, registry, and built-ins in `src/system-context`; keep Context Source producers with their observed domains, and keep Session History selection plus Context Epoch persistence Session-owned.
+
+## Fork Maintenance
+
+- This fork tracks upstream closely. Prefer small, portable patches that are easy to rebase onto upstream `dev`.
+- Reuse existing code paths before adding new APIs, generated SDK changes, or new abstractions.
+- Do not fix unrelated upstream baseline issues while implementing fork-specific features. Report them as verification blockers instead.
+- Avoid touching generated files unless the requested change requires it.
+- Keep fork-specific commits focused and signed. Push work to `dev` unless instructed otherwise.
+- If pre-push checks fail because of known upstream baseline errors, ask before skipping hooks.
