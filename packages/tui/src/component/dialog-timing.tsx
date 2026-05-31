@@ -34,8 +34,9 @@ export const decodeTimingReport = Schema.decodeUnknownSync(TimingReport)
 export function normalizeTimingReport(input: unknown) {
   const spans = typeof input === "object" && input !== null ? Reflect.get(input, "spans") : undefined
   if (Array.isArray(spans)) {
+    const report = input as Record<string, unknown>
     return decodeTimingReport({
-      ...input,
+      ...report,
       spans: spans.map((span) => {
         if (typeof span !== "object" || span === null) return span
         return {
