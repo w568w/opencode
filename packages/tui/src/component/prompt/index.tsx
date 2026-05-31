@@ -168,6 +168,7 @@ export function Prompt(props: PromptProps) {
   const { theme, syntax } = useTheme()
   const kv = useKV()
   const animationsEnabled = createMemo(() => kv.get("animations_enabled", true))
+  const yoloMode = createMemo(() => kv.get("yolo_mode", false))
   const list = createMemo(() => props.placeholders?.normal ?? [])
   const shell = createMemo(() => props.placeholders?.shell ?? [])
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
@@ -1459,6 +1460,12 @@ export function Prompt(props: PromptProps) {
                               </span>
                             </text>
                           </Show>
+                        </box>
+                      </Show>
+                      <Show when={yoloMode()}>
+                        <box flexDirection="row" gap={1}>
+                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
+                          <text fg={fadeColor(theme.warning, modelMetaAlpha())}>YOLO mode on</text>
                         </box>
                       </Show>
                     </>

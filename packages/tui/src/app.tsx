@@ -129,6 +129,7 @@ const appBindingCommands = [
   "app.toggle.diffwrap",
   "app.toggle.paste_summary",
   "app.toggle.session_directory_filter",
+  "session.toggle.yolo",
 ] as const
 
 export type TuiInput = {
@@ -535,6 +536,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   )
 
   const connected = useConnected()
+  const [yoloMode, setYoloMode] = kv.signal("yolo_mode", false)
   const currentWorktreeWorkspace = createMemo(() => {
     const workspaceID = project.workspace.current()
     if (!workspaceID) return
@@ -574,6 +576,91 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         run: () => {
           route.navigate({
             type: "home",
+          })
+          dialog.clear()
+        },
+      },
+      {
+        name: "instance.reload",
+        title: "Reload configuration",
+        category: "System",
+        slashName: "reload",
+        run: async () => {
+          const busy = Object.values(sync.data.session_status).some((status) => status?.type !== "idle")
+          if (busy) {
+            toast.show({ message: "Wait for running sessions to finish before reloading", variant: "warning" })
+            dialog.clear()
+            return
+          }
+          toast.show({ message: "Reloading configuration...", variant: "info" })
+          try {
+            type ReloadItem = Record<string, unknown>
+            const fingerprint = (value: unknown): string => {
+              if (!value || typeof value !== "object") return JSON.stringify(value) ?? String(value)
+              if (Array.isArray(value)) return `[${value.map(fingerprint).join(",")}]`
+              return `{${Object.entries(value)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([key, item]) => `${JSON.stringify(key)}:${fingerprint(item)}`)
+                .join(",")}}`
+            }
+            const countChanged = (before: ReloadItem[], after: ReloadItem[]) => {
+              const key = (item: ReloadItem) =>
+                typeof (item.name ?? item.id) === "string" ? String(item.name ?? item.id) : fingerprint(item)
+              const beforeMap = new Map(before.map((item) => [key(item), fingerprint(item)]))
+              const afterMap = new Map(after.map((item) => [key(item), fingerprint(item)]))
+              let count = 0
+              for (const item of new Set([...beforeMap.keys(), ...afterMap.keys()])) {
+                if (beforeMap.get(item) !== afterMap.get(item)) count++
+              }
+              return count
+            }
+            const snapshot = async () => {
+              const workspace = project.workspace.current()
+              const [skills, agents, prompts] = await Promise.all([
+                sdk.client.app.skills({ workspace }, { throwOnError: true }).then((x) => x.data ?? []),
+                sdk.client.app.agents({ workspace }, { throwOnError: true }).then((x) => x.data ?? []),
+                sdk.client.command.list({ workspace }, { throwOnError: true }).then((x) => x.data ?? []),
+              ])
+              return { skills, agents, prompts }
+            }
+
+            const before = await snapshot()
+            await sdk.client.instance.dispose()
+            await sync.bootstrap({ fatal: false })
+            const after = await snapshot()
+            const changed = {
+              skills: countChanged(before.skills, after.skills),
+              agents: countChanged(before.agents, after.agents),
+              prompts: countChanged(before.prompts, after.prompts),
+            }
+            const parts = [
+              `${changed.skills} skill${changed.skills === 1 ? "" : "s"} changed`,
+              `${changed.agents} agent${changed.agents === 1 ? "" : "s"} changed`,
+              `${changed.prompts} prompt${changed.prompts === 1 ? "" : "s"} changed`,
+            ]
+            toast.show({
+              message: parts.every((part) => part.startsWith("0 "))
+                ? "Reloaded. No config changes detected."
+                : `Reloaded. ${parts.join(", ")}.`,
+              variant: "success",
+            })
+          } catch (error) {
+            toast.show({ message: `Reload failed: ${errorMessage(error)}`, variant: "error" })
+          }
+          dialog.clear()
+        },
+      },
+      {
+        name: "session.toggle.yolo",
+        title: yoloMode() ? "Disable YOLO mode" : "Enable YOLO mode",
+        category: "Session",
+        slashName: "yolo",
+        run: () => {
+          const next = !yoloMode()
+          setYoloMode(() => next)
+          toast.show({
+            message: next ? "YOLO mode enabled" : "YOLO mode disabled",
+            variant: next ? "warning" : "success",
           })
           dialog.clear()
         },

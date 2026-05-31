@@ -187,6 +187,13 @@ export const {
 
         case "permission.asked": {
           const request = event.properties
+          if (kv.get("yolo_mode", false)) {
+            void sdk.client.permission.reply({
+              requestID: request.id,
+              reply: "once",
+            })
+            break
+          }
           const requests = store.permission[request.sessionID]
           if (!requests) {
             setStore("permission", request.sessionID, [request])
