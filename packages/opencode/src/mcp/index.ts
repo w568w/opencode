@@ -35,6 +35,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
+import { DiagnosticsTiming } from "@/diagnostics/timing"
 
 const DEFAULT_TIMEOUT = 30_000
 const CLIENT_OPTIONS = {
@@ -358,32 +359,49 @@ export const layer = Layer.effect(
 
     const create = Effect.fn("MCP.create")(
       function* (key: string, mcp: ConfigMCPV1.Info) {
+        const timing = DiagnosticsTiming.start(`mcp.${key}.total`, { type: mcp.type })
         if (mcp.enabled === false) {
+          DiagnosticsTiming.end(timing)
           return DISABLED_RESULT
         }
 
-        const { client: mcpClient, status } =
-          mcp.type === "remote"
-            ? yield* connectRemote(key, mcp as ConfigMCPV1.Info & { type: "remote" })
-            : yield* connectLocal(key, mcp as ConfigMCPV1.Info & { type: "local" })
-
-        if (!mcpClient) {
-          if (status.status !== "connected" && status.status !== "disabled") {
-            yield* Effect.logWarning("server unavailable", { key, type: mcp.type, status: status.status })
-          }
-          return { status } satisfies CreateResult
-        }
-
         return yield* Effect.gen(function* () {
-          const listed = mcpClient.getServerCapabilities()?.tools ? yield* McpCatalog.defs(mcpClient, mcp.timeout) : []
-          if (!listed) {
-            return yield* Effect.fail(new Error("Failed to get tools"))
+          const { client: mcpClient, status } =
+            mcp.type === "remote"
+              ? yield* connectRemote(key, mcp as ConfigMCPV1.Info & { type: "remote" })
+              : yield* connectLocal(key, mcp as ConfigMCPV1.Info & { type: "local" })
+
+          if (!mcpClient) {
+            if (status.status !== "connected" && status.status !== "disabled") {
+              yield* Effect.logWarning("server unavailable", { key, type: mcp.type, status: status.status })
+            }
+            DiagnosticsTiming.end(timing)
+            return { status } satisfies CreateResult
           }
-          return { mcpClient, status, defs: listed } satisfies CreateResult
+
+          const result = yield* Effect.gen(function* () {
+            const toolsTiming = DiagnosticsTiming.start(`mcp.${key}.tools`, undefined, timing)
+            const listed = yield* Effect.gen(function* () {
+              return mcpClient.getServerCapabilities()?.tools ? yield* McpCatalog.defs(mcpClient, mcp.timeout) : []
+            }).pipe(
+              Effect.tapCause((cause) =>
+                Effect.sync(() => DiagnosticsTiming.end(toolsTiming, "error", Cause.squash(cause))),
+              ),
+            )
+            DiagnosticsTiming.end(toolsTiming)
+            if (!listed) {
+              return yield* Effect.fail(new Error("Failed to get tools"))
+            }
+            return { mcpClient, status, defs: listed } satisfies CreateResult
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.tryPromise(() => mcpClient.close()).pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause))),
+            ),
+          )
+          DiagnosticsTiming.end(timing)
+          return result
         }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.tryPromise(() => mcpClient.close()).pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause))),
-          ),
+          Effect.tapCause((cause) => Effect.sync(() => DiagnosticsTiming.end(timing, "error", Cause.squash(cause)))),
         )
       },
       Effect.map((result): CreateResult => result),
@@ -475,6 +493,7 @@ export const layer = Layer.effect(
         const cfg = yield* cfgSvc.get()
         const bridge = yield* EffectBridge.make()
         const config = cfg.mcp ?? {}
+        const timing = DiagnosticsTiming.start("mcp.startup", { count: Object.keys(config).length })
         const s: State = {
           config: {},
           status: {},
@@ -506,6 +525,7 @@ export const layer = Layer.effect(
             }),
           { concurrency: "unbounded" },
         )
+        DiagnosticsTiming.end(timing)
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {

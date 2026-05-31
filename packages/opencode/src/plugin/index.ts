@@ -31,6 +31,7 @@ import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@opencode-ai/core/installation/version"
+import { DiagnosticsTiming } from "@/diagnostics/timing"
 
 type State = {
   hooks: Hooks[]
@@ -165,7 +166,8 @@ export const layer = Layer.effect(
 
         for (const plugin of flags.disableDefaultPlugins ? [] : internalPlugins(flags)) {
           const init = yield* Effect.tryPromise({
-            try: () => plugin(input),
+            try: () =>
+              DiagnosticsTiming.measure("plugin.internal", { name: plugin.name || "anonymous" }, () => plugin(input)),
             catch: errorMessage,
           }).pipe(
             Effect.tapError((error) => Effect.logError("failed to load internal plugin", { name: plugin.name, error })),
@@ -177,7 +179,16 @@ export const layer = Layer.effect(
         const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
         if (flags.pure && cfg.plugin_origins?.length) {
         }
-        if (plugins.length) yield* config.waitForDependencies()
+        if (plugins.length) {
+          const dependenciesSpan = DiagnosticsTiming.start("plugin.dependencies", { count: plugins.length })
+          try {
+            yield* config.waitForDependencies()
+            DiagnosticsTiming.end(dependenciesSpan)
+          } catch (error) {
+            DiagnosticsTiming.end(dependenciesSpan, "error", error)
+            throw error
+          }
+        }
 
         const loaded = yield* Effect.promise(() =>
           PluginLoader.loadExternal({
@@ -218,7 +229,8 @@ export const layer = Layer.effect(
           // Keep plugin execution sequential so hook registration and execution
           // order remains deterministic across plugin runs.
           yield* Effect.tryPromise({
-            try: () => applyPlugin(load, input, hooks),
+            try: () =>
+              DiagnosticsTiming.measure("plugin.external", { spec: load.spec }, () => applyPlugin(load, input, hooks)),
             catch: (err) => {
               const message = errorMessage(err)
               return message

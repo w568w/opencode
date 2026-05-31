@@ -82,6 +82,7 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { DialogTiming, normalizeTimingReport } from "./component/dialog-timing"
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -392,6 +393,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     }),
   )
   const [ready, setReady] = createSignal(false)
+  const uiReady = createMemo(() => ready() && sync.ready)
   props.pluginHost
     .start({
       api,
@@ -648,6 +650,26 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
             toast.show({ message: `Reload failed: ${errorMessage(error)}`, variant: "error" })
           }
           dialog.clear()
+        },
+      },
+      {
+        name: "diagnostics.time",
+        title: "Show startup timing",
+        category: "System",
+        slashName: "diagnose-time",
+        run: async () => {
+          try {
+            const workspace = project.workspace.current()
+            const url = new URL("/diagnostics/time", sdk.url)
+            if (workspace) url.searchParams.set("workspace", workspace)
+            const response = await sdk.fetch(url)
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            const report = normalizeTimingReport(await response.json())
+            dialog.replace(() => <DialogTiming report={report} />)
+            dialog.setSize("xlarge")
+          } catch (error) {
+            toast.show({ message: `Failed to load timing: ${errorMessage(error)}`, variant: "error" })
+          }
         },
       },
       {
@@ -1181,7 +1203,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         <pluginRuntime.Slot name="app" />
       </Show>
       <Show when={!startup.skipInitialLoading}>
-        <StartupLoading ready={ready} />
+        <StartupLoading ready={uiReady} />
       </Show>
     </box>
   )

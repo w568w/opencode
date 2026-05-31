@@ -4,6 +4,7 @@ import { Format } from "@/format"
 import { LSP } from "@/lsp/lsp"
 import { Vcs } from "@/project/vcs"
 import { Skill } from "@/skill"
+import { TimingReport } from "@/diagnostics/timing"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
@@ -53,6 +54,7 @@ export const InstancePaths = {
   skill: "/skill",
   lsp: "/lsp",
   formatter: "/formatter",
+  diagnosticsTime: "/diagnostics/time",
 } as const
 
 export const InstanceApi = HttpApi.make("instance")
@@ -184,6 +186,16 @@ export const InstanceApi = HttpApi.make("instance")
             identifier: "formatter.status",
             summary: "Get formatter status",
             description: "Get formatter status",
+          }),
+        ),
+        HttpApiEndpoint.get("diagnosticsTime", InstancePaths.diagnosticsTime, {
+          query: WorkspaceRoutingQuery,
+          success: described(TimingReport, "Startup timing report"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "diagnostics.time",
+            summary: "Get startup timing",
+            description: "Retrieve startup and initialization timing spans for diagnostics.",
           }),
         ),
       )

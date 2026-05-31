@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { DiagnosticsTiming } from "@/diagnostics/timing"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 
@@ -1295,11 +1296,13 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
-        const bridge = yield* EffectBridge.make()
-        const cfg = yield* config.get()
-        const modelsDev = yield* modelsDevSvc.get()
-        const catalog = mapValues(modelsDev, fromModelsDevProvider)
-        const database = mapValues(catalog, toPublicInfo)
+        const timing = DiagnosticsTiming.start("provider.state")
+        try {
+          const bridge = yield* EffectBridge.make()
+          const cfg = yield* config.get()
+          const modelsDev = yield* modelsDevSvc.get()
+          const catalog = mapValues(modelsDev, fromModelsDevProvider)
+          const database = mapValues(catalog, toPublicInfo)
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1347,6 +1350,7 @@ export const layer = Layer.effect(
           return true
         }
 
+        const pluginModelsSpan = DiagnosticsTiming.start("provider.state.plugin-models", undefined, timing)
         for (const hook of plugins) {
           const p = hook.provider
           const models = p?.models
@@ -1358,21 +1362,33 @@ export const layer = Layer.effect(
           const provider = database[providerID]
           if (!provider) continue
           const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+          const hookSpan = DiagnosticsTiming.start(
+            "provider.state.plugin-models.hook",
+            { provider: providerID },
+            pluginModelsSpan,
+          )
 
-          provider.models = yield* Effect.promise(async () => {
-            const next = await models(toPublicInfo(provider), { auth: pluginAuth })
-            return Object.fromEntries(
-              Object.entries(next).map(([id, model]) => [
-                id,
-                {
-                  ...model,
-                  id: ModelV2.ID.make(id),
-                  providerID,
-                },
-              ]),
-            )
-          })
+          try {
+            provider.models = yield* Effect.promise(async () => {
+              const next = await models(toPublicInfo(provider), { auth: pluginAuth })
+              return Object.fromEntries(
+                Object.entries(next).map(([id, model]) => [
+                  id,
+                  {
+                    ...model,
+                    id: ModelV2.ID.make(id),
+                    providerID,
+                  },
+                ]),
+              )
+            })
+            DiagnosticsTiming.end(hookSpan)
+          } catch (error) {
+            DiagnosticsTiming.end(hookSpan, "error", error)
+            throw error
+          }
         }
+        DiagnosticsTiming.end(pluginModelsSpan)
 
         // extend database from config
         for (const [providerID, provider] of configProviders) {
@@ -1495,6 +1511,7 @@ export const layer = Layer.effect(
         }
 
         // plugin auth loader - database now has entries for config providers
+        const pluginAuthSpan = DiagnosticsTiming.start("provider.state.plugin-auth", undefined, timing)
         for (const plugin of plugins) {
           if (!plugin.auth) continue
           const providerID = ProviderV2.ID.make(plugin.auth.provider)
@@ -1503,17 +1520,29 @@ export const layer = Layer.effect(
           const stored = yield* auth.get(providerID).pipe(Effect.orDie)
           if (!stored) continue
           if (!plugin.auth.loader) continue
-
-          const options = yield* Effect.promise(() =>
-            plugin.auth!.loader!(
-              () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
-              toPublicInfo(database[plugin.auth!.provider]),
-            ),
+          const hookSpan = DiagnosticsTiming.start(
+            "provider.state.plugin-auth.loader",
+            { provider: providerID },
+            pluginAuthSpan,
           )
-          const opts = options ?? {}
-          const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
-          mergeProvider(providerID, patch)
+
+          try {
+            const options = yield* Effect.promise(() =>
+              plugin.auth!.loader!(
+                () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
+                toPublicInfo(database[plugin.auth!.provider]),
+              ),
+            )
+            const opts = options ?? {}
+            const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
+            mergeProvider(providerID, patch)
+            DiagnosticsTiming.end(hookSpan)
+          } catch (error) {
+            DiagnosticsTiming.end(hookSpan, "error", error)
+            throw error
+          }
         }
+        DiagnosticsTiming.end(pluginAuthSpan)
 
         for (const [id, fn] of Object.entries(custom(dep))) {
           const providerID = ProviderV2.ID.make(id)
@@ -1606,13 +1635,16 @@ export const layer = Layer.effect(
           }
         }
 
-        return {
-          models: languages,
-          providers,
-          catalog,
-          sdk,
-          modelLoaders,
-          varsLoaders,
+          return {
+            models: languages,
+            providers,
+            catalog,
+            sdk,
+            modelLoaders,
+            varsLoaders,
+          }
+        } finally {
+          DiagnosticsTiming.end(timing)
         }
       }),
     )

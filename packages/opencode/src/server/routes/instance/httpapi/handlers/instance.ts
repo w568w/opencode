@@ -11,6 +11,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ApiVcsApplyError } from "../groups/instance"
 import { markInstanceForDisposal } from "../lifecycle"
+import { DiagnosticsTiming } from "@/diagnostics/timing"
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
@@ -93,6 +94,11 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       return yield* format.status()
     })
 
+    const getDiagnosticsTime = Effect.fn("InstanceHttpApi.diagnosticsTime")(function* () {
+      DiagnosticsTiming.measureSync("diagnostics.time.snapshot", undefined, () => undefined)
+      return DiagnosticsTiming.snapshot()
+    })
+
     return handlers
       .handle("dispose", dispose)
       .handle("path", getPath)
@@ -106,5 +112,6 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       .handle("skill", getSkill)
       .handle("lsp", getLsp)
       .handle("formatter", getFormatter)
+      .handle("diagnosticsTime", getDiagnosticsTime)
   }),
 )
