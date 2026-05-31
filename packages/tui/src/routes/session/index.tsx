@@ -580,6 +580,28 @@ export function Session() {
       },
     },
     {
+      title: "Reload configuration",
+      value: "instance.reload",
+      category: "Session",
+      slash: {
+        name: "reload",
+      },
+      run: async () => {
+        const busy = Object.values(sync.data.session_status).some((status) => status?.type !== "idle")
+        if (busy) {
+          toast.show({ message: "Wait for running sessions to finish before reloading", variant: "warning" })
+          dialog.clear()
+          return
+        }
+        await sdk.client.instance
+          .dispose()
+          .then(() => sync.bootstrap({ fatal: false }))
+          .then(() => toast.show({ message: "Configuration reloaded", variant: "success" }))
+          .catch((error) => toast.show({ message: errorMessage(error), variant: "error" }))
+        dialog.clear()
+      },
+    },
+    {
       title: "Unshare session",
       value: "session.unshare",
       category: "Session",
