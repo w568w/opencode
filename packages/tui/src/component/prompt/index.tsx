@@ -55,7 +55,7 @@ import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, u
 import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
-import { readLocalAttachment } from "./local-attachment"
+import { localAttachmentMime, readLocalAttachment } from "./local-attachment"
 
 export type PromptProps = {
   sessionID?: string
@@ -219,6 +219,16 @@ export function Prompt(props: PromptProps) {
     if (sync.data.provider.length === 0) {
       dialog.replace(() => <DialogProviderConnect />)
     }
+  }
+
+  function modelSupportsAttachment(mime: string) {
+    const model = local.model.current()
+    if (!model) return false
+    const provider = sync.data.provider.find((item) => item.id === model.providerID)
+    const input = provider?.models[model.modelID]?.capabilities.input
+    if (mime === "application/pdf") return input?.pdf === true
+    if (mime.startsWith("image/")) return input?.image === true
+    return false
   }
 
   function dismissEditorContext() {
@@ -1181,6 +1191,11 @@ export function Prompt(props: PromptProps) {
     const filepath = pastedFilepath(pastedContent, terminalEnvironment.platform)
     const isUrl = /^(https?):\/\//.test(filepath)
     if (!isUrl) {
+      const mime = localAttachmentMime(filepath)
+      if ((mime === "application/pdf" || (mime.startsWith("image/") && mime !== "image/svg+xml")) && !modelSupportsAttachment(mime)) {
+        input.insertText(normalizedText)
+        return
+      }
       const attachment = await readLocalAttachment(filepath)
       const filename = path.basename(filepath)
       if (attachment?.type === "text") {
