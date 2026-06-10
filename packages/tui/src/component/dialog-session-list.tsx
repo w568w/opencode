@@ -2,7 +2,7 @@ import { useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { useRoute } from "../context/route"
 import { useSync } from "../context/sync"
-import { createMemo, createResource, createSignal, onMount } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, onMount } from "solid-js"
 import path from "path"
 import { Locale } from "../util/locale"
 import { useProject } from "../context/project"
@@ -17,6 +17,35 @@ import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
 import { DialogSessionDeleteFailed } from "./dialog-session-delete-failed"
 import { useCommandShortcut } from "../keymap"
+
+type SessionListFilter = {
+  scope?: "project"
+  path?: string
+}
+
+type SessionListItem = {
+  id: string
+  parentID?: string
+  time: {
+    updated: number
+  }
+}
+
+function dialogSessionListQuery(input: { query: string; filter: SessionListFilter }) {
+  return {
+    ...input.filter,
+    roots: true,
+    limit: input.query ? 30 : 100,
+    ...(input.query ? { search: input.query } : {}),
+  }
+}
+
+function orderByRecency(sessions: SessionListItem[]) {
+  return sessions
+    .filter((x) => x.parentID === undefined)
+    .toSorted((a, b) => b.time.updated - a.time.updated)
+    .map((x) => x.id)
+}
 
 export function DialogSessionList() {
   const dialog = useDialog()
@@ -33,19 +62,42 @@ export function DialogSessionList() {
   const quickSwitch1 = useCommandShortcut("session.quick_switch.1")
   const quickSwitch9 = useCommandShortcut("session.quick_switch.9")
 
-  const [searchResults, { refetch }] = createResource(
+  const [searchResults, { refetch: refetchSearch }] = createResource(
     () => ({ query: search(), filter: sync.session.query() }),
     async (input) => {
       if (!input.query) return undefined
-      const result = await sdk.client.session.list({ search: input.query, limit: 30, ...input.filter })
+      const result = await sdk.client.session.list(dialogSessionListQuery(input))
+      return result.data ?? []
+    },
+  )
+
+  const [browseResults, { refetch: refetchBrowse }] = createResource(
+    () => sync.session.query(),
+    async (filter) => {
+      const result = await sdk.client.session.list(dialogSessionListQuery({ query: "", filter }))
       return result.data ?? []
     },
   )
 
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
   const sessions = createMemo(() => {
-    if (search()) return searchResults() ?? []
-    return sync.data.session
+    const searchResult = searchResults()
+    if (searchResult) return searchResult
+
+    const sessionMap = new Map(
+      (browseResults() ?? sync.data.session)
+        .filter((x) => x.parentID === undefined)
+        .map((x) => [x.id, x] as const),
+    )
+    const pinned = new Set(local.session.pinned())
+    const current = currentSessionID()
+
+    sync.data.session
+      .filter((x) => x.parentID === undefined)
+      .filter((x) => sessionMap.has(x.id) || pinned.has(x.id) || x.id === current)
+      .forEach((x) => sessionMap.set(x.id, x))
+
+    return [...sessionMap.values()]
   })
 
   function recover(session: NonNullable<ReturnType<typeof sessions>[number]>) {
@@ -111,7 +163,8 @@ export function DialogSessionList() {
           }
           await project.workspace.sync()
           await sync.session.refresh()
-          if (search()) await refetch()
+          await refetchBrowse()
+          if (search()) await refetchSearch()
           if (info?.workspaceID === session.workspaceID) {
             route.navigate({ type: "home" })
           }
@@ -134,14 +187,14 @@ export function DialogSessionList() {
     ))
   }
 
-  function orderByRecency(sessionsList: NonNullable<ReturnType<typeof sessions>>) {
-    return sessionsList
-      .filter((x) => x.parentID === undefined)
-      .toSorted((a, b) => b.time.updated - a.time.updated)
-      .map((x) => x.id)
-  }
-
-  const [browseOrder] = createSignal<string[]>(orderByRecency(sync.data.session))
+  const [browseOrder, setBrowseOrder] = createSignal<string[]>()
+  createEffect(() => {
+    const current = browseOrder()
+    const loaded = browseResults()
+    if (loaded === undefined || current !== undefined) return
+    setBrowseOrder(orderByRecency(loaded))
+  })
+  const browsePending = createMemo(() => !search() && browseResults.loading && browseOrder() === undefined)
 
   const quickSwitchHint = createMemo(() => {
     const first = quickSwitch1()
@@ -163,7 +216,13 @@ export function DialogSessionList() {
     )
 
     const searchResult = searchResults()
-    const displayOrder = searchResult ? orderByRecency(searchResult) : browseOrder()
+    const rootOrder = browseOrder() ?? orderByRecency(sessions())
+    const current = currentSessionID()
+    const displayOrder = searchResult
+      ? orderByRecency(searchResult)
+      : current && sessionMap.has(current) && !rootOrder.includes(current)
+        ? [...rootOrder, current]
+        : rootOrder
 
     const pinned = local.session.pinned().filter((id) => sessionMap.has(id))
     const pinnedSet = new Set(pinned)
@@ -211,6 +270,8 @@ export function DialogSessionList() {
 
     return [...pinned.map((id) => buildOption(id, "Pinned")).filter((x) => x !== undefined), ...remaining]
   })
+  const loading = createMemo(() => browsePending() && options().length === 0)
+  const selectOptions = createMemo(() => (loading() ? [{ title: "Loading sessions...", value: "" }] : options()))
 
   onMount(() => {
     dialog.setSize("large")
@@ -219,8 +280,9 @@ export function DialogSessionList() {
   return (
     <DialogSelect
       title="Sessions"
-      options={options()}
+      options={selectOptions()}
       skipFilter={true}
+      locked={loading()}
       current={currentSessionID()}
       onFilter={setSearch}
       onMove={() => {
@@ -282,7 +344,8 @@ export function DialogSessionList() {
               if (status && status !== "connected") {
                 await sync.session.refresh()
               }
-              if (search()) await refetch()
+              await refetchBrowse()
+              if (search()) await refetchSearch()
               setToDelete(undefined)
               return
             }
