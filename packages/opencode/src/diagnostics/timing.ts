@@ -72,7 +72,7 @@ export async function measure<T>(
   parentID = stack.at(-1),
 ) {
   const id = start(name, tags, parentID)
-  if (parentID !== undefined) stack.push(id)
+  stack.push(id)
   try {
     const result = await run()
     end(id)
@@ -81,7 +81,7 @@ export async function measure<T>(
     end(id, "error", error)
     throw error
   } finally {
-    if (parentID !== undefined) stack.pop()
+    stack.pop()
   }
 }
 
@@ -92,7 +92,7 @@ export function measureSync<T>(
   parentID = stack.at(-1),
 ) {
   const id = start(name, tags, parentID)
-  if (parentID !== undefined) stack.push(id)
+  stack.push(id)
   try {
     const result = run()
     end(id)
@@ -101,7 +101,7 @@ export function measureSync<T>(
     end(id, "error", error)
     throw error
   } finally {
-    if (parentID !== undefined) stack.pop()
+    stack.pop()
   }
 }
 
